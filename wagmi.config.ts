@@ -1,12 +1,12 @@
 import { createConfig, http } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
-import { metaMask } from 'wagmi/connectors'
+import { injected } from 'wagmi/connectors'
 
 export const config = createConfig({
   chains: [sepolia],
-  connectors: [metaMask()],
+  connectors: [injected()],
   transports: {
-    [sepolia.id]: http(process.env.NEXT_PUBLIC_RPC_URL || 'https://rpc.sepolia.org'),
+    [sepolia.id]: http(process.env.NEXT_PUBLIC_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com'),
   },
 })
 

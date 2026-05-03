@@ -32,12 +32,17 @@ export async function sendBookingConfirmation(payload: EmailPayload): Promise<bo
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'EthTix <tickets@ethtix.app>',
+        from: 'EthTix <onboarding@resend.dev>',
         to: [to],
-        subject: `🎫 Booking Confirmed: ${firstTicket.eventName}`,
+        subject: `Booking Confirmed: ${firstTicket.eventName}`,
         html,
       }),
     })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      console.error('Resend API error:', response.status, errorBody)
+    }
 
     return response.ok
   } catch (error) {

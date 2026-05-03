@@ -8,6 +8,7 @@ import { fetchEvents } from './tools/fetchEvents'
 import { matchEvents, formatMatchResults } from './tools/matchEvents'
 import { checkCalendarAvailability, createCalendarEvent } from './tools/checkCalendar'
 import { mintFreeTicketServer, getExplorerUrl, getContractAddress } from '@/lib/ethereum'
+import { sendBookingConfirmation } from '@/lib/email'
 import Groq from 'groq-sdk'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
@@ -26,6 +27,7 @@ interface AgentState {
   calendarChecked: boolean
   awaitingBookAnyway: boolean
   pendingConflictBooking: { event: ScrapedEvent; attendees: Attendee[] } | null
+  lastBookingResult: { tickets: TicketInfo[]; contractAddress: string } | null
 }
 
 let state: AgentState = createInitialState()
@@ -42,6 +44,7 @@ function createInitialState(): AgentState {
     calendarChecked: false,
     awaitingBookAnyway: false,
     pendingConflictBooking: null,
+    lastBookingResult: null,
   }
 }
 
@@ -67,13 +70,13 @@ function classifyIntent(message: string): ActionType {
     if (/yes|confirm|book|that one|let's go|proceed/.test(lower)) return 'confirm_booking'
   }
 
-  // Regex-based classification
+  // Regex-based classification (order matters — more specific patterns first)
   if (/^(hi|hello|hey|greetings|good morning|good evening|sup|yo)\b/.test(lower)) return 'greeting'
+  if (/email|send.*confirm|confirmation.*email|receipt/.test(lower)) return 'provide_email'
+  if (/cancel|never ?mind|forget it|start over|reset/.test(lower)) return 'cancel'
+  if (/check.*calendar|am i free|availability|schedule/.test(lower)) return 'check_calendar'
   if (/find|search|looking for|show me|discover|what.*events|any.*events|upcoming/.test(lower)) return 'search_events'
   if (/book|purchase|buy|get ticket|i want to (go|attend)|reserve|sign me up/.test(lower)) return 'book_ticket'
-  if (/check.*calendar|am i free|availability|schedule/.test(lower)) return 'check_calendar'
-  if (/email|send.*confirmation|receipt/.test(lower)) return 'provide_email'
-  if (/cancel|never ?mind|forget it|start over|reset/.test(lower)) return 'cancel'
   return 'general_question'
 }
 
@@ -178,9 +181,13 @@ export async function handleMessage(
   const calendarConnected = !!context.calendarToken
   const walletConnected = !!context.userWallet
 
-  // Restore booking result from client state
-  if (context.bookingResult) {
+  // Restore booking result from client state (serverless functions lose module state)
+  if (context.bookingResult && context.bookingResult.success) {
     state.bookingExecuted = true
+    state.lastBookingResult = {
+      tickets: context.bookingResult.tickets,
+      contractAddress: context.bookingResult.contractAddress,
+    }
   }
 
   // Classify intent
@@ -271,24 +278,39 @@ async function handleSearchEvents(
     }
   }
 
-  // Step 3: Check calendar (if connected + emails available)
-  let calendarData: AttendeeAvailability[] | undefined
-  if (context.calendarToken && context.attendeeEmails && context.attendeeEmails.length > 0) {
-    toolCalls.push({ tool: 'check_calendars', status: 'running', summary: 'Checking calendar availability...' })
-    // Check against first event's time for initial filtering
-    calendarData = await checkCalendarAvailability(
-      context.calendarToken,
-      context.attendeeEmails,
-      events[0].startAt,
-      events[0].endAt
-    )
+  // Step 3: Match and rank (without calendar data first for speed)
+  toolCalls.push({ tool: 'match_events', status: 'running', summary: 'Ranking events by your preferences...' })
+  let matches = matchEvents(events, intent)
+
+  // Step 3b: Check calendar for top matched events individually (if connected)
+  if (context.calendarToken && context.attendeeEmails && context.attendeeEmails.length > 0 && matches.length > 0) {
+    toolCalls.push({ tool: 'check_calendars', status: 'running', summary: 'Checking calendar for top events...' })
+
+    for (const match of matches) {
+      try {
+        const availability = await checkCalendarAvailability(
+          context.calendarToken,
+          context.attendeeEmails,
+          match.event.startAt,
+          match.event.endAt
+        )
+        const allFree = availability.every(a => a.isFree)
+        match.calendarMatch = allFree
+        if (!allFree) {
+          const busyEmails = availability.filter(a => !a.isFree).map(a => a.email)
+          match.conflictDetails = `Conflicts: ${busyEmails.join(', ')}`
+        } else {
+          match.conflictDetails = undefined
+        }
+      } catch {
+        // Calendar check failed for this event, assume available
+        match.calendarMatch = true
+      }
+    }
+
     state.calendarChecked = true
     toolCalls[toolCalls.length - 1].status = 'completed'
   }
-
-  // Step 4: Match and rank
-  toolCalls.push({ tool: 'match_events', status: 'running', summary: 'Ranking events by your preferences...' })
-  const matches = matchEvents(events, intent, calendarData)
   state.matches = matches
   state.confirmationRequested = true
   toolCalls[toolCalls.length - 1].status = 'completed'
@@ -312,8 +334,18 @@ async function handleConfirmBooking(
   const lower = message.toLowerCase()
   let selectedIndex = -1
 
-  // Try number
-  const numMatch = lower.match(/^(\d)$/) || lower.match(/option (\d)/) || lower.match(/number (\d)/)
+  // Extract attendee names from this message (e.g., "book for Akash and Aman")
+  const attendeeMatch = message.match(/(?:for|name of|names?)\s+(.+)/i)
+  if (attendeeMatch) {
+    const names = attendeeMatch[1].split(/\s*(?:and|,)\s*/).map(n => n.trim()).filter(Boolean)
+    if (names.length > 0) {
+      state.intent = state.intent || { attendees: [], budget: null, preferredDays: [], genres: [], location: '', checkCalendar: false }
+      state.intent.attendees = names.map(name => ({ name }))
+    }
+  }
+
+  // Try number — multiple patterns
+  const numMatch = lower.match(/(\d)(?:st|nd|rd|th)?\s*(?:event|option)?/) || lower.match(/^(\d)$/) || lower.match(/option (\d)/) || lower.match(/number (\d)/)
   if (numMatch) {
     selectedIndex = parseInt(numMatch[1]) - 1
   } else if (/first|1st/.test(lower)) selectedIndex = 0
@@ -386,40 +418,45 @@ function buildBookingResponse(
   toolCalls: ToolCallResult[]
 ): AgentResponse {
   const contractAddress = getContractAddress()
-  const attendeeName = state.intent?.attendees?.[0]?.name || 'Attendee'
+  const attendees = state.intent?.attendees || [{ name: 'Attendee' }]
+  const attendeeNames = attendees.map(a => a.name).join(', ')
+  const ticketCount = attendees.length
 
   if (event.isFree) {
-    // Free event: will be minted server-side
+    // Free event: server-side minting for each attendee
     return {
-      response: `Booking **${event.name}** (FREE event).\n\nI'll mint your NFT ticket now — no ETH required, just a signature to confirm.`,
+      response: `Booking **${ticketCount} ticket${ticketCount > 1 ? 's' : ''}** for **${event.name}** (FREE event) for: ${attendeeNames}.\n\nJust sign the message in MetaMask to confirm — no ETH required.`,
       toolCalls,
       walletAction: {
         type: 'sign_message',
-        message: `EthTix: Confirm free ticket for "${event.name}" at ${event.venue} on ${event.date}`,
+        message: `EthTix: Confirm ${ticketCount} free ticket(s) for "${event.name}" at ${event.venue} on ${event.date} — Attendees: ${attendeeNames}`,
       },
       pendingBooking: {
         event,
-        attendees: state.intent?.attendees || [{ name: attendeeName }],
+        attendees,
         requiresPayment: false,
       },
     }
   } else {
-    // Paid event: client-side contract call
-    const metadataUri = `${process.env.NEXT_PUBLIC_VERCEL_URL || 'http://localhost:3000'}/api/ticket-metadata?event=${encodeURIComponent(event.name)}&venue=${encodeURIComponent(event.venue)}&date=${encodeURIComponent(event.date)}&attendee=${encodeURIComponent(attendeeName)}&price=${event.price}`
+    // Paid event: one contract call per attendee
+    // For multiple attendees, we charge platform fee per ticket
+    const totalFee = BigInt(100000000000000) * BigInt(ticketCount) // 0.0001 ETH per ticket
+    const firstAttendee = attendees[0]?.name || 'Attendee'
+    const metadataUri = `${process.env.NEXT_PUBLIC_VERCEL_URL || 'http://localhost:3000'}/api/ticket-metadata?event=${encodeURIComponent(event.name)}&venue=${encodeURIComponent(event.venue)}&date=${encodeURIComponent(event.date)}&attendee=${encodeURIComponent(firstAttendee)}&price=${event.price}`
 
     return {
-      response: `Booking **${event.name}** — ${event.isFree ? 'FREE' : `$${event.price}`}.\n\n💳 Platform fee: **0.0001 ETH** will be charged.\n\nPlease confirm the transaction in MetaMask.`,
+      response: `Booking **${ticketCount} ticket${ticketCount > 1 ? 's' : ''}** for **${event.name}** — ${event.isFree ? 'FREE' : `$${event.price}`} for: ${attendeeNames}.\n\n💳 Platform fee: **${(Number(totalFee) / 1e18).toFixed(4)} ETH** (${ticketCount} × 0.0001 ETH).\n\nPlease confirm the transaction in MetaMask.`,
       toolCalls,
       walletAction: {
         type: 'contract_write',
         address: contractAddress,
         functionName: 'purchaseTicket',
-        args: [event.apiId, event.name, event.venue, event.date, attendeeName, metadataUri],
-        value: '100000000000000', // 0.0001 ETH in wei
+        args: [event.apiId, event.name, event.venue, event.date, attendeeNames, metadataUri],
+        value: totalFee.toString(),
       },
       pendingBooking: {
         event,
-        attendees: state.intent?.attendees || [{ name: attendeeName }],
+        attendees,
         requiresPayment: true,
       },
     }
@@ -449,21 +486,51 @@ async function handleCheckCalendar(
   }
 }
 
-function handleProvideEmail(
+async function handleProvideEmail(
   message: string,
   context: { userWallet?: WalletInfo; calendarToken?: string; attendeeEmails?: string[] },
   toolCalls: ToolCallResult[]
-): AgentResponse {
-  if (!state.bookingExecuted) {
+): Promise<AgentResponse> {
+  if (!state.bookingExecuted || !state.lastBookingResult) {
     return {
       response: "I'll send a confirmation email after we complete a booking. Would you like to search for events first?",
       toolCalls: [],
     }
   }
 
-  return {
-    response: "I'll send the booking confirmation to the email addresses on file. Check your inbox shortly!",
-    toolCalls,
+  // Extract email from message
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
+  const emails = message.match(emailRegex)
+  if (!emails || emails.length === 0) {
+    return {
+      response: "Please provide an email address. For example: *send confirmation to john@example.com*",
+      toolCalls: [],
+    }
+  }
+
+  const to = emails[0]
+  toolCalls.push({ tool: 'send_email', status: 'running', summary: `Sending to ${to}...` })
+
+  const success = await sendBookingConfirmation({
+    to,
+    bookingResult: state.lastBookingResult,
+    userWalletAddress: context.userWallet?.address || '',
+  })
+
+  if (success) {
+    toolCalls[toolCalls.length - 1].status = 'completed'
+    toolCalls[toolCalls.length - 1].summary = `Sent to ${to}`
+    return {
+      response: `✅ Booking confirmation sent to **${to}**! Check your inbox.`,
+      toolCalls,
+    }
+  } else {
+    toolCalls[toolCalls.length - 1].status = 'error'
+    toolCalls[toolCalls.length - 1].summary = 'Email send failed'
+    return {
+      response: `❌ Failed to send email to ${to}. Please check the address and try again.`,
+      toolCalls,
+    }
   }
 }
 
@@ -571,6 +638,7 @@ export async function executePendingBooking(
 
     state.bookingExecuted = true
     state.confirmationRequested = false
+    state.lastBookingResult = { tickets, contractAddress }
 
     let response = `🎫 **Booking Confirmed!**\n\n`
     response += `**${event.name}**\n`

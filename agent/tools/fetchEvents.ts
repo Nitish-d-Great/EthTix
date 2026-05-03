@@ -1,6 +1,35 @@
 import { ScrapedEvent } from '@/types'
+import Groq from 'groq-sdk'
 
 const LUMA_API_BASE = 'https://api.lu.ma/discover/get-paginated-events'
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+async function resolveLocationCoords(location: string): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a geocoding assistant. Given a location name, return its latitude and longitude. Return ONLY a JSON object like {"lat": 37.7749, "lng": -122.4194}. No explanation, no markdown, just the JSON.'
+        },
+        { role: 'user', content: location }
+      ],
+      temperature: 0,
+      max_tokens: 50,
+    })
+
+    const text = completion.choices[0]?.message?.content?.trim() || ''
+    const parsed = JSON.parse(text)
+    if (typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+      return parsed
+    }
+    return null
+  } catch {
+    console.error('Failed to resolve coordinates for:', location)
+    return null
+  }
+}
 
 interface LumaEntry {
   event: {
@@ -106,10 +135,20 @@ export async function fetchEvents(
   let cursor: string | undefined
   const maxPages = 3
 
+  // Resolve location to coordinates via LLM (once)
+  const coords = await resolveLocationCoords(location)
+  if (coords) {
+    console.log(`Resolved "${location}" → ${coords.lat}, ${coords.lng}`)
+  } else {
+    console.log(`Could not resolve coordinates for "${location}", using fallback events`)
+    return getFallbackEvents(location)
+  }
+
   try {
     for (let page = 0; page < maxPages; page++) {
-      const params = new URLSearchParams({ location })
-      if (category) params.set('category', category)
+      const params = new URLSearchParams()
+      params.set('geo_latitude', coords.lat.toString())
+      params.set('geo_longitude', coords.lng.toString())
       if (cursor) params.set('cursor', cursor)
 
       const response = await fetch(`${LUMA_API_BASE}?${params}`, {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useAccount, useSignMessage, useWriteContract } from 'wagmi'
 import { v4 as uuidv4 } from 'uuid'
 import { ChatMessage, ToolCallResult, AgentResponse, WalletAction, PendingBooking, BookingResult } from '@/types'
@@ -202,13 +202,13 @@ export default function Home() {
   }
 
   // Handle OAuth callback on mount
-  if (typeof window !== 'undefined') {
+  useEffect(() => {
     const hash = window.location.hash
     if (hash.includes('calendar_token=')) {
       const params = new URLSearchParams(hash.slice(1))
       const token = params.get('calendar_token')
       const email = params.get('email')
-      if (token && !calendarToken) {
+      if (token) {
         setCalendarToken(token)
         if (email) {
           setCalendarEmail(email)
@@ -217,7 +217,7 @@ export default function Home() {
         window.history.replaceState(null, '', window.location.pathname)
       }
     }
-  }
+  }, [])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

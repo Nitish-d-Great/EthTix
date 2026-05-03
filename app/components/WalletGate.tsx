@@ -2,7 +2,7 @@
 
 import { useAccount, useConnect, useSendTransaction, useWaitForTransactionReceipt } from 'wagmi'
 import { parseEther } from 'viem'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const PLATFORM_FEE = '0.0001' // ETH
 const PLATFORM_WALLET = process.env.NEXT_PUBLIC_PLATFORM_WALLET as `0x${string}`
@@ -13,25 +13,38 @@ interface WalletGateProps {
 
 export default function WalletGate({ children }: WalletGateProps) {
   const { address, isConnected } = useAccount()
-  const { connect, connectors } = useConnect()
-  const { sendTransaction, data: txHash, isPending: isSending } = useSendTransaction()
+  const { connect, connectors, isPending: isConnectPending, error: connectError } = useConnect()
+  const { sendTransaction, data: txHash, isPending: isSending, error: sendError } = useSendTransaction()
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash: txHash })
   const [accessGranted, setAccessGranted] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (accessGranted || isConfirmed) {
-    if (!accessGranted && isConfirmed) setAccessGranted(true)
+  // Display errors from wagmi hooks
+  useEffect(() => {
+    if (connectError) setError(connectError.message)
+  }, [connectError])
+
+  useEffect(() => {
+    if (sendError) setError(sendError.message)
+  }, [sendError])
+
+  // Grant access after payment confirmed
+  useEffect(() => {
+    if (isConfirmed && !accessGranted) setAccessGranted(true)
+  }, [isConfirmed, accessGranted])
+
+  if (accessGranted) {
     return <>{children}</>
   }
 
   const handleConnect = () => {
     setError(null)
     const connector = connectors[0]
-    if (connector) {
-      connect({ connector })
-    } else {
-      setError('MetaMask not detected. Please install MetaMask.')
+    if (!connector) {
+      setError('No wallet detected. Please install MetaMask.')
+      return
     }
+    connect({ connector })
   }
 
   const handlePayFee = () => {
@@ -43,6 +56,7 @@ export default function WalletGate({ children }: WalletGateProps) {
     sendTransaction({
       to: PLATFORM_WALLET,
       value: parseEther(PLATFORM_FEE),
+      gas: BigInt(21000),
     })
   }
 
@@ -75,9 +89,10 @@ export default function WalletGate({ children }: WalletGateProps) {
             </p>
             <button
               onClick={handleConnect}
-              className="w-full py-3 px-4 bg-primary hover:bg-primary/80 text-white font-medium rounded-lg transition-colors"
+              disabled={isConnectPending}
+              className="w-full py-3 px-4 bg-primary hover:bg-primary/80 disabled:bg-dark-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
             >
-              Connect MetaMask
+              {isConnectPending ? 'Connecting...' : 'Connect MetaMask'}
             </button>
           </div>
         )}
@@ -97,7 +112,7 @@ export default function WalletGate({ children }: WalletGateProps) {
               disabled={isSending || isConfirming}
               className="w-full py-3 px-4 bg-primary hover:bg-primary/80 disabled:bg-dark-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
             >
-              {isSending ? 'Signing...' : isConfirming ? 'Confirming...' : `Pay ${PLATFORM_FEE} ETH`}
+              {isSending ? 'Confirm in MetaMask...' : isConfirming ? 'Confirming on-chain...' : `Pay ${PLATFORM_FEE} ETH`}
             </button>
             {txHash && (
               <p className="text-xs text-gray-400 text-center">
