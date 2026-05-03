@@ -152,7 +152,6 @@ export type ActionType =
   | 'confirm_booking'
   | 'provide_email'
   | 'check_calendar'
-  | 'discover_music'
   | 'cancel'
   | 'book_anyway'
   | 'general_question';
@@ -168,23 +167,3 @@ export interface AgentResponse {
   needsEmails?: boolean;
 }
 
-// ============================================
-// Audius Types
-// ============================================
-
-export interface AudiusTrack {
-  id: string;
-  title: string;
-  artist: string;
-  artwork: string;
-  duration: number;
-  playCount: number;
-  favoriteCount: number;
-  embedUrl: string;
-  trackUrl: string;
-}
-
-export interface AudiusDiscoveryResult {
-  tracks: AudiusTrack[];
-  source: string;
-}

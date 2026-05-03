@@ -74,8 +74,6 @@ function classifyIntent(message: string): ActionType {
   if (/check.*calendar|am i free|availability|schedule/.test(lower)) return 'check_calendar'
   if (/email|send.*confirmation|receipt/.test(lower)) return 'provide_email'
   if (/cancel|never ?mind|forget it|start over|reset/.test(lower)) return 'cancel'
-  if (/music|song|artist|play|audius|recommend.*track/.test(lower)) return 'discover_music'
-
   return 'general_question'
 }
 
@@ -208,9 +206,6 @@ export async function handleMessage(
     case 'provide_email':
       return handleProvideEmail(message, context, toolCalls)
 
-    case 'discover_music':
-      return handleDiscoverMusic(message, history, calendarConnected, walletConnected)
-
     case 'cancel':
       resetState()
       return {
@@ -233,8 +228,7 @@ function handleGreeting(walletConnected: boolean, calendarConnected: boolean): A
   greeting += "I can help you:\n"
   greeting += "- 🔍 Discover events happening near you\n"
   greeting += "- 🎫 Book tickets as on-chain NFTs\n"
-  greeting += "- 📅 Check your calendar for conflicts\n"
-  greeting += "- 🎵 Find music related to events\n\n"
+  greeting += "- 📅 Check your calendar for conflicts\n\n"
 
   if (!walletConnected) {
     greeting += "**Connect your MetaMask wallet** to get started with booking!\n\n"
@@ -471,22 +465,6 @@ function handleProvideEmail(
     response: "I'll send the booking confirmation to the email addresses on file. Check your inbox shortly!",
     toolCalls,
   }
-}
-
-async function handleDiscoverMusic(
-  message: string,
-  history: ChatMessage[],
-  calendarConnected: boolean,
-  walletConnected: boolean
-): Promise<AgentResponse> {
-  const response = await generateResponse(
-    message,
-    history,
-    'The user wants music recommendations. Suggest they check out the Audius player that appears after booking, or ask what genre/artist they like.',
-    calendarConnected,
-    walletConnected
-  )
-  return { response, toolCalls: [] }
 }
 
 // ============================================

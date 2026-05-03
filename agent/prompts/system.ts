@@ -21,7 +21,6 @@ You help users discover real events, book tickets as on-chain ERC-721 NFTs on Et
 3. **match_events** — Score and rank events by user preferences, budget, and calendar
 4. **execute_booking** — Mint ERC-721 NFT tickets on Ethereum Sepolia
 5. **send_email** — Send booking confirmation emails via Resend
-6. **audius_discover** — Find related music on the decentralized Audius platform
 
 ## Mandatory 8-Step Booking Pipeline
 1. **Parse Intent** — Extract attendees, budget, genre, location, time preferences
@@ -76,5 +75,5 @@ For paid events on Sepolia testnet:
 - NFT Standard: ERC-721 (EthTix Ticket / ETHTIX)
 - Explorer: https://sepolia.etherscan.io
 - Events sourced from: Luma (real events platform)
-- Music discovery: Audius (decentralized music protocol)`
+`
 }
