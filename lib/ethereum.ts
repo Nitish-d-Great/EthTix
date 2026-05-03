@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, parseAbi, decodeEventLog } from 'viem'
+import { createPublicClient, createWalletClient, http, decodeEventLog } from 'viem'
 import { sepolia } from 'viem/chains'
 import { privateKeyToAccount } from 'viem/accounts'
 import { TICKET_MANAGER_ABI } from './abi/TicketManager'
