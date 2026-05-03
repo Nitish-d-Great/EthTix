@@ -9,8 +9,16 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        primary: "#5B5BD6",
+        secondary: "#8B5CF6",
+        accent: "#06D6A0",
+        dark: {
+          900: "#0a0a0f",
+          800: "#12121a",
+          700: "#1a1a25",
+          600: "#242430",
+          500: "#2e2e3a",
+        },
       },
     },
   },
